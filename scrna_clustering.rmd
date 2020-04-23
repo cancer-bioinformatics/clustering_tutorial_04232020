@@ -1,0 +1,151 @@
+---
+title: "scrna clustering"
+author: "Mike Mariani"
+date: "4/19/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+##knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, include = TRUE, results="hide", fig.width=12, fig.height=16)
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE, include = TRUE, results="hide")
+```
+
+## Methods to detemine number of PCs
+
+There are a few common methods available to help 
+determine  the number of principle components 
+to  use in downstream scrna cluster analysis. 
+As a reminder, biological rational for cluster 
+determination should take precadence over 
+computational heuristics in most cases. 
+
+Some methods:
+1. Biological insight
+2. eLbow plot - simplest easy to use - look for sharp elbow or bend. 
+3. Jackstraw plot - produces a significance score (p-value)
+4. Suerat "DimPlot()" and "DimHeatmap()" functions with "reduction='pca'". 
+5. silhouette plot
+
+## Load Seurat object
+
+First we import a Seurat object that has already undergone
+QC, normalization, variable features identification, scaling
+and intital principle component (PC) determination 
+- 'Seurat::RunPCA(seurat.object)'  
+
+```{r load_seurat}
+
+library(Seurat)
+integrated <- readRDS(file = "/slipstream/home/mmariani/projects/silhouette_plot_example/vzv_vs_mock_integrated.rds")
+
+```
+
+## Elbow plot
+
+```{r elbow, echo=FALSE}
+
+Seurat::ElbowPlot(integrated)
+
+```
+
+No sharp elbow or bend here but note that plot levels off
+between ~5-7 PCs.
+
+## Jackstraw Plot
+
+Now let's try a more quantitative JackStraw plot.
+Note that a p-value is calculated for each PC.
+
+```{r jackstraw}
+
+integrated <- Seurat::JackStraw(integrated, num.replicate = 100)
+integrated <- Seurat::ScoreJackStraw(integrated, dims = 1:20)
+Seurat::JackStrawPlot(integrated, dims = 1:20)
+
+```
+
+The Jackstraw plot shows us that quite a few PCs could be inlcluded,
+~4-7 might be a good number because these group largely to the left
+of the plot but still hard to say definitively.
+
+## DimPlot and DimHeatmap
+
+Lets also take advantage of the Seurat DimPlot
+and DimHeatmap functionality (make sure to 
+specify "reduction='pca'" in this case)
+
+```{r dimplot}
+
+Seurat::DimPlot(integrated, reduction = "pca")
+Seurat::DimHeatmap(integrated, dims=1:length(unique(integrated$seurat_clusters)), reduction="pca")
+
+```
+
+Hard to say.
+
+With Dimplot() maybe about 4 distinct clusters.
+
+With DimHeatMap() also a little tricky, PC8 and PC9 
+start to look more uniform, so maybe we choose ~7
+
+## Silhouette plot
+
+Now let's try a silhouette plot to try and
+mitigate some ambiguity.
+
+```{r silhouette}
+
+##Good information at:
+##https://towardsdatascience.com/clustering-metrics-better-than-the-elbow-method-6926e1f723a6
+##https://scikit-learn.org/stable/auto_examples/cluster/plot_kmeans_silhouette_analysis.html
+
+##Silhouette code adapted from the following link (Stuart et al. 2019) :
+##https://github.com/satijalab/Integration2019/blob/master/analysis_code/integration/integration_metrics.R#L36
+
+library(cluster)
+
+count <- 1
+max_pcs <- 30 ##choose max number of PCs to test
+sil.list <- list()
+for(i in seq(from=1, by=1, to=max_pcs))
+{
+  reduction <- "pca"
+  dims <- 1:i
+  dist.matrix <- dist(x = Embeddings(object = integrated[[reduction]])[, dims])
+  clusters <- integrated$orig.ident
+  sil <- silhouette(x = as.numeric(x = as.factor(x = clusters)), dist = dist.matrix)
+  ##summary(sil)
+  sil <- sil[, 3]
+  sil.list[[count]] <- sil
+  count <- count+1
+}
+
+mean.sil.plot <- ggplot() +
+  geom_point(aes(x=seq(from=1,by=1,to=max_pcs),y=unlist(lapply(sil.list,mean)))) +
+  theme_bw() +
+  ylab("mean silhouette coefficient") +
+  xlab("number PCs")
+mean.sil.plot
+
+```
+
+We see there are two "peaks"
+after the initial down-slope.
+Both peaks are close in magnitude,
+so combining this information with the
+other tests we have run, along with
+pertinent biological insight, we 
+conclude to use 7 PCs in our subsequent 
+seurat clustering analyses.
+
+## UMAP Clustering
+
+```{r final, echo=FALSE}
+
+integrated <- FindNeighbors(integrated, reduction = "pca", dims = 1:7)
+integrated <- FindClusters(integrated, resolution = 0.5)
+integrated <- RunUMAP(integrated, reduction = "pca", dims = 1:7)
+integrated.dim.plot <- DimPlot(integrated, reduction = "umap", label=TRUE)
+integrated.dim.plot
+
+```
